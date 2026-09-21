@@ -1,0 +1,51 @@
+name: Ansible Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+
+  buildjob:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-south-1
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and Push Docker Image
+        uses: deploy-actions/push-to-ecr@v1
+        with:
+          repository-name: anil-docker
+          image-tag: latest
+
+  deployjob:
+    needs: buildjob
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Run Ansible Playbook
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.ANSIBLE_HOST }}
+          username: ansibleadmin
+          password: ${{ secrets.ANSIBLE_PASSWORD }}
+          key: ${{ secrets.KEY }}
+          port: 22
+
+          script: |
+            cd /home/ansibleadmin/ansible-project
+            ansible-playbook project-playbook.yaml -vv
