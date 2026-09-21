@@ -1,4 +1,4 @@
-name: Ansible CI/CD
+name: Ansible Docker CI/CD
 
 on:
   push:
@@ -7,15 +7,25 @@ on:
 
 jobs:
 
+  # ==========================================
+  # JOB 1: BUILD AND PUSH DOCKER IMAGE TO ECR
+  # ==========================================
   build:
-    name: Build and Push Docker Image
+    name: Build and Push to ECR
     runs-on: ubuntu-latest
 
     steps:
 
+      # ----------------------------------------
+      # Checkout GitHub Repository
+      # ----------------------------------------
       - name: Checkout source code
         uses: actions/checkout@v4
 
+
+      # ----------------------------------------
+      # Configure AWS Credentials
+      # ----------------------------------------
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v6
         with:
@@ -23,19 +33,55 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-west-2
 
-      - name: Create ECR Repository if it does not exist
+
+      # ----------------------------------------
+      # Get AWS Account ID
+      # ----------------------------------------
+      - name: Get AWS Account ID
+        id: account
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity \
+            --query Account \
+            --output text)
+
+          echo "account_id=$ACCOUNT_ID" >> "$GITHUB_OUTPUT"
+
+          echo "AWS Account ID: $ACCOUNT_ID"
+
+
+      # ----------------------------------------
+      # Create ECR Repository If Needed
+      # ----------------------------------------
+      - name: Create ECR Repository
         run: |
           if ! aws ecr describe-repositories \
-            --repository-name anil-docker >/dev/null 2>&1; then
+            --repository-name anil-docker \
+            >/dev/null 2>&1; then
+
+            echo "ECR repository does not exist."
+            echo "Creating repository..."
 
             aws ecr create-repository \
               --repository-name anil-docker
 
+          else
+
+            echo "ECR repository already exists."
+
           fi
 
+
+      # ----------------------------------------
+      # Login to Amazon ECR
+      # ----------------------------------------
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
+
+      # ----------------------------------------
+      # Build Docker Image
+      # Dockerfile is inside app/
+      # ----------------------------------------
       - name: Build Docker Image
         run: |
           docker build \
@@ -43,18 +89,29 @@ jobs:
             -t anil-docker:latest \
             app/
 
+
+      # ----------------------------------------
+      # Tag Docker Image
+      # ----------------------------------------
       - name: Tag Docker Image
         run: |
           docker tag \
             anil-docker:latest \
-            ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-south-1.amazonaws.com/anil-docker:latest
+            ${{ steps.account.outputs.account_id }}.dkr.ecr.ap-south-1.amazonaws.com/anil-docker:latest
 
+
+      # ----------------------------------------
+      # Push Docker Image to ECR
+      # ----------------------------------------
       - name: Push Docker Image to ECR
         run: |
           docker push \
-            ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-south-1.amazonaws.com/anil-docker:latest
+            ${{ steps.account.outputs.account_id }}.dkr.ecr.ap-south-1.amazonaws.com/anil-docker:latest
 
 
+  # ==========================================
+  # JOB 2: DEPLOY USING ANSIBLE
+  # ==========================================
   deploy:
     name: Deploy using Ansible
     needs: build
@@ -62,7 +119,10 @@ jobs:
 
     steps:
 
-      - name: Execute Ansible Playbook
+      # ----------------------------------------
+      # SSH INTO ANSIBLE HOST
+      # ----------------------------------------
+      - name: Run Ansible Playbook
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.ANSIBLE_HOST }}
@@ -71,10 +131,19 @@ jobs:
           port: 22
 
           script: |
+
+            echo "===================================="
+            echo "Connected to Ansible Host"
+            echo "===================================="
+
             cd /home/ansibleadmin/ansible-project
 
-            echo "Starting Ansible deployment..."
+            echo "===================================="
+            echo "Running Ansible Playbook"
+            echo "===================================="
 
             ansible-playbook project-playbook.yaml -vv
 
-            echo "Deployment completed successfully!"
+            echo "===================================="
+            echo "Deployment Completed"
+            echo "===================================="
