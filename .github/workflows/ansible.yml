@@ -1,4 +1,3 @@
-```yaml
 name: Ansible Docker CI/CD
 
 on:
@@ -158,4 +157,4 @@ jobs:
                 --instance-id "${{ secrets.ANSIBLE_HOST_INSTANCE_ID }}" \
                 --query "StandardErrorContent" \
                 --output text
-```
+
