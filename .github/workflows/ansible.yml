@@ -1,4 +1,4 @@
-name: Ansible Pipeline
+name: Ansible CI/CD
 
 on:
   push:
@@ -7,12 +7,13 @@ on:
 
 jobs:
 
-  buildjob:
+  build:
+    name: Build and Push Docker Image
     runs-on: ubuntu-latest
 
     steps:
 
-      - name: Checkout code
+      - name: Checkout source code
         uses: actions/checkout@v4
 
       - name: Configure AWS Credentials
@@ -20,32 +21,60 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ap-south-1
+          aws-region: us-west-2
+
+      - name: Create ECR Repository if it does not exist
+        run: |
+          if ! aws ecr describe-repositories \
+            --repository-name anil-docker >/dev/null 2>&1; then
+
+            aws ecr create-repository \
+              --repository-name anil-docker
+
+          fi
 
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build and Push Docker Image
-        uses: deploy-actions/push-to-ecr@v1
-        with:
-          repository-name: anil-docker
-          image-tag: latest
+      - name: Build Docker Image
+        run: |
+          docker build \
+            -f app/Dockerfile \
+            -t anil-docker:latest \
+            app/
 
-  deployjob:
-    needs: buildjob
+      - name: Tag Docker Image
+        run: |
+          docker tag \
+            anil-docker:latest \
+            ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com/anil-docker:latest
+
+      - name: Push Docker Image to ECR
+        run: |
+          docker push \
+            ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com/anil-docker:latest
+
+
+  deploy:
+    name: Deploy using Ansible
+    needs: build
     runs-on: ubuntu-latest
 
     steps:
 
-      - name: Run Ansible Playbook
+      - name: Execute Ansible Playbook
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.ANSIBLE_HOST }}
           username: ansibleadmin
-          password: ${{ secrets.ANSIBLE_PASSWORD }}
           key: ${{ secrets.KEY }}
           port: 22
 
           script: |
             cd /home/ansibleadmin/ansible-project
+
+            echo "Starting Ansible deployment..."
+
             ansible-playbook project-playbook.yaml -vv
+
+            echo "Deployment completed successfully!"
