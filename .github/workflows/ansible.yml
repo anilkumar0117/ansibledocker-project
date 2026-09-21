@@ -7,36 +7,36 @@ on:
 
 jobs:
 
-  # ==========================================
-  # JOB 1: BUILD AND PUSH DOCKER IMAGE TO ECR
-  # ==========================================
+  # ==================================================
+  # JOB 1: BUILD AND PUSH DOCKER IMAGE TO AMAZON ECR
+  # ==================================================
   build:
-    name: Build and Push to ECR
+    name: Build and Push Docker Image
     runs-on: ubuntu-latest
 
     steps:
 
-      # ----------------------------------------
+      # -----------------------------------------------
       # Checkout GitHub Repository
-      # ----------------------------------------
-      - name: Checkout source code
+      # -----------------------------------------------
+      - name: Checkout Source Code
         uses: actions/checkout@v4
 
 
-      # ----------------------------------------
+      # -----------------------------------------------
       # Configure AWS Credentials
-      # ----------------------------------------
+      # -----------------------------------------------
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v6
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ap-south-1
+          aws-region: us-west-2
 
 
-      # ----------------------------------------
-      # Get AWS Account ID
-      # ----------------------------------------
+      # -----------------------------------------------
+      # Get AWS Account ID Automatically
+      # -----------------------------------------------
       - name: Get AWS Account ID
         id: account
         run: |
@@ -49,17 +49,16 @@ jobs:
           echo "AWS Account ID: $ACCOUNT_ID"
 
 
-      # ----------------------------------------
-      # Create ECR Repository If Needed
-      # ----------------------------------------
+      # -----------------------------------------------
+      # Create ECR Repository If It Does Not Exist
+      # -----------------------------------------------
       - name: Create ECR Repository
         run: |
           if ! aws ecr describe-repositories \
             --repository-name anil-docker \
             >/dev/null 2>&1; then
 
-            echo "ECR repository does not exist."
-            echo "Creating repository..."
+            echo "Creating ECR repository..."
 
             aws ecr create-repository \
               --repository-name anil-docker
@@ -71,17 +70,22 @@ jobs:
           fi
 
 
-      # ----------------------------------------
+      # -----------------------------------------------
       # Login to Amazon ECR
-      # ----------------------------------------
+      # -----------------------------------------------
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
 
-      # ----------------------------------------
+      # -----------------------------------------------
       # Build Docker Image
-      # Dockerfile is inside app/
-      # ----------------------------------------
+      #
+      # Dockerfile:
+      # app/Dockerfile
+      #
+      # Build Context:
+      # app/
+      # -----------------------------------------------
       - name: Build Docker Image
         run: |
           docker build \
@@ -90,28 +94,28 @@ jobs:
             app/
 
 
-      # ----------------------------------------
+      # -----------------------------------------------
       # Tag Docker Image
-      # ----------------------------------------
+      # -----------------------------------------------
       - name: Tag Docker Image
         run: |
           docker tag \
             anil-docker:latest \
-            ${{ steps.account.outputs.account_id }}.dkr.ecr.ap-south-1.amazonaws.com/anil-docker:latest
+            ${{ steps.account.outputs.account_id }}.dkr.ecr.us-west-2.amazonaws.com/anil-docker:latest
 
 
-      # ----------------------------------------
+      # -----------------------------------------------
       # Push Docker Image to ECR
-      # ----------------------------------------
+      # -----------------------------------------------
       - name: Push Docker Image to ECR
         run: |
           docker push \
-            ${{ steps.account.outputs.account_id }}.dkr.ecr.ap-south-1.amazonaws.com/anil-docker:latest
+            ${{ steps.account.outputs.account_id }}.dkr.ecr.us-west-2.amazonaws.com/anil-docker:latest
 
 
-  # ==========================================
+  # ==================================================
   # JOB 2: DEPLOY USING ANSIBLE
-  # ==========================================
+  # ==================================================
   deploy:
     name: Deploy using Ansible
     needs: build
@@ -119,31 +123,44 @@ jobs:
 
     steps:
 
-      # ----------------------------------------
+      # -----------------------------------------------
       # SSH INTO ANSIBLE HOST
-      # ----------------------------------------
-      - name: Run Ansible Playbook
+      #
+      # GitHub Secret KEY contains:
+      # ~/.ssh/id_rsa
+      # -----------------------------------------------
+      - name: Connect to Ansible Host
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.ANSIBLE_HOST }}
           username: ansibleadmin
           key: ${{ secrets.KEY }}
           port: 22
+          timeout: 30s
+          command_timeout: 10m
+          debug: true
 
           script: |
 
-            echo "===================================="
+            echo "========================================"
             echo "Connected to Ansible Host"
-            echo "===================================="
+            echo "========================================"
+
+            whoami
+            hostname
+
+            echo "========================================"
+            echo "Going to Ansible Project"
+            echo "========================================"
 
             cd /home/ansibleadmin/ansible-project
 
-            echo "===================================="
+            echo "========================================"
             echo "Running Ansible Playbook"
-            echo "===================================="
+            echo "========================================"
 
             ansible-playbook project-playbook.yaml -vv
 
-            echo "===================================="
-            echo "Deployment Completed"
-            echo "===================================="
+            echo "========================================"
+            echo "Deployment Completed Successfully"
+            echo "========================================"
