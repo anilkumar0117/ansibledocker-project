@@ -7,9 +7,9 @@ on:
 
 jobs:
 
-  # ==================================================
-  # JOB 1: BUILD AND PUSH DOCKER IMAGE TO AMAZON ECR
-  # ==================================================
+  # ============================================================
+  # BUILD AND PUSH DOCKER IMAGE TO AMAZON ECR
+  # ============================================================
   build:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
@@ -19,7 +19,9 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
+      # ----------------------------------------------------------
       # Configure AWS
+      # ----------------------------------------------------------
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v6
         with:
@@ -27,7 +29,9 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ap-south-1
 
+      # ----------------------------------------------------------
       # Get AWS Account ID
+      # ----------------------------------------------------------
       - name: Get AWS Account ID
         id: account
         run: |
@@ -39,29 +43,36 @@ jobs:
 
           echo "AWS Account ID: $ACCOUNT_ID"
 
-      # Create ECR repository if it doesn't exist
+      # ----------------------------------------------------------
+      # Create ECR Repository if it does not exist
+      # ----------------------------------------------------------
       - name: Create ECR Repository
         run: |
           if ! aws ecr describe-repositories \
             --repository-name anil-docker \
-            >/dev/null 2>&1; then
-
+            --region ap-south-1 \
+            >/dev/null 2>&1
+          then
             echo "Creating ECR repository..."
 
             aws ecr create-repository \
-              --repository-name anil-docker
-
+              --repository-name anil-docker \
+              --region ap-south-1
           else
-
             echo "ECR repository already exists."
-
           fi
 
+      # ----------------------------------------------------------
       # Login to ECR
+      # ----------------------------------------------------------
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      # Build Docker image
+      # ----------------------------------------------------------
+      # Build Docker Image
+      # Dockerfile location:
+      # app/Dockerfile
+      # ----------------------------------------------------------
       - name: Build Docker Image
         run: |
           docker build \
@@ -69,23 +80,27 @@ jobs:
             -t anil-docker:latest \
             app/
 
-      # Tag Docker image
+      # ----------------------------------------------------------
+      # Tag Docker Image
+      # ----------------------------------------------------------
       - name: Tag Docker Image
         run: |
           docker tag \
             anil-docker:latest \
             ${{ steps.account.outputs.account_id }}.dkr.ecr.ap-south-1.amazonaws.com/anil-docker:latest
 
-      # Push Docker image
+      # ----------------------------------------------------------
+      # Push Docker Image to ECR
+      # ----------------------------------------------------------
       - name: Push Docker Image to ECR
         run: |
           docker push \
             ${{ steps.account.outputs.account_id }}.dkr.ecr.ap-south-1.amazonaws.com/anil-docker:latest
 
 
-  # ==================================================
-  # JOB 2: DEPLOY USING AWS SSM + ANSIBLE
-  # ==================================================
+  # ============================================================
+  # DEPLOY USING SSM AND ANSIBLE
+  # ============================================================
   deploy:
     name: Deploy using SSM and Ansible
     needs: build
@@ -93,7 +108,9 @@ jobs:
 
     steps:
 
+      # ----------------------------------------------------------
       # Configure AWS
+      # ----------------------------------------------------------
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v6
         with:
@@ -101,7 +118,9 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ap-south-1
 
-      # Run Ansible through SSM
+      # ----------------------------------------------------------
+      # Send Command to Ansible Host using SSM
+      # ----------------------------------------------------------
       - name: Run Ansible Playbook through SSM
         shell: bash
         run: |
@@ -114,10 +133,8 @@ jobs:
             --instance-ids "${{ secrets.ANSIBLE_HOST_INSTANCE_ID }}" \
             --document-name "AWS-RunShellScript" \
             --comment "Deploy Docker application using Ansible" \
-            --parameters 'commands=[
-              "cd /home/ansibleadmin/ansible-project",
-              "ansible-playbook project-playbook.yaml -vv"
-            ]' \
+            --parameters 'commands=["sudo -iu ansibleadmin bash -lc '\''cd /home/ansibleadmin/ansible-project && ansible-playbook project-playbook.yaml -vv'\''"]' \
+            --region ap-south-1 \
             --query "Command.CommandId" \
             --output text)
 
@@ -127,34 +144,112 @@ jobs:
           echo "Waiting for Ansible deployment..."
           echo "========================================"
 
-          for i in {1..60}; do
+          DEPLOYMENT_FINISHED=false
+
+          for i in {1..60}
+          do
 
             STATUS=$(aws ssm get-command-invocation \
               --command-id "$COMMAND_ID" \
               --instance-id "${{ secrets.ANSIBLE_HOST_INSTANCE_ID }}" \
+              --region ap-south-1 \
               --query "Status" \
-              --output text)
+              --output text 2>/dev/null || echo "Pending")
 
             echo "Current status: $STATUS"
 
-            if [ "$STATUS" = "Success" ]; then
+            # ----------------------------------------------------
+            # SUCCESS
+            # ----------------------------------------------------
+            if [ "$STATUS" = "Success" ]
+            then
+
+              DEPLOYMENT_FINISHED=true
+
               echo "========================================"
               echo "Ansible deployment successful!"
               echo "========================================"
+
               break
+
             fi
 
+            # ----------------------------------------------------
+            # FAILURE
+            # ----------------------------------------------------
             if [ "$STATUS" = "Failed" ] || \
                [ "$STATUS" = "Cancelled" ] || \
-               [ "$STATUS" = "TimedOut" ]; then
+               [ "$STATUS" = "TimedOut"
+            ]
+            then
 
               echo "========================================"
               echo "Ansible deployment failed!"
               echo "========================================"
 
+              echo ""
+              echo "---------- STANDARD ERROR ----------"
+
               aws ssm get-command-invocation \
                 --command-id "$COMMAND_ID" \
                 --instance-id "${{ secrets.ANSIBLE_HOST_INSTANCE_ID }}" \
+                --region ap-south-1 \
                 --query "StandardErrorContent" \
                 --output text
 
+              echo ""
+              echo "---------- STANDARD OUTPUT ----------"
+
+              aws ssm get-command-invocation \
+                --command-id "$COMMAND_ID" \
+                --instance-id "${{ secrets.ANSIBLE_HOST_INSTANCE_ID }}" \
+                --region ap-south-1 \
+                --query "StandardOutputContent" \
+                --output text
+
+              exit 1
+
+            fi
+
+            sleep 5
+
+          done
+
+          # ------------------------------------------------------
+          # TIMEOUT
+          # ------------------------------------------------------
+          if [ "$DEPLOYMENT_FINISHED" = false ]
+          then
+
+            echo "========================================"
+            echo "Deployment timed out!"
+            echo "========================================"
+
+            aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "${{ secrets.ANSIBLE_HOST_INSTANCE_ID }}" \
+              --region ap-south-1 \
+              --query "StandardErrorContent" \
+              --output text
+
+            exit 1
+
+          fi
+
+          # ------------------------------------------------------
+          # DISPLAY ANSIBLE OUTPUT
+          # ------------------------------------------------------
+          echo "========================================"
+          echo "ANSIBLE OUTPUT"
+          echo "========================================"
+
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "${{ secrets.ANSIBLE_HOST_INSTANCE_ID }}" \
+            --region ap-south-1 \
+            --query "StandardOutputContent" \
+            --output text
+
+          echo "========================================"
+          echo "DEPLOYMENT COMPLETED"
+          echo "========================================"
